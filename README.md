@@ -7,6 +7,7 @@ Zustandsautomaten zeichnen, ausprobieren und automatisch prüfen lassen. Gedacht
 
 - **Bauen:** „+ Zustand“, Zustände verschieben, mit dem Werkzeug „Pfeil ziehen“ Übergänge zeichnen. Pro Pfeil
   werden Eingabe und Ausgabe gewählt. Zweimal auf denselben Zustand tippen erzeugt eine Schleife.
+  „Rückgängig“ (oder Strg+Z) nimmt die letzten Schritte zurück, solange die Aufgabe offen ist.
 - **Testen:** Bedienfeld mit Eingängen (Taster) und Ausgängen (Lampen). Zeigt Zustand, Anzahl der Eingaben und
   Ausgaben und ein Protokoll.
 - **Prüfen:** Vergleicht das Verhalten mit der Musterlösung (nicht die Zeichnung). Zustandsnamen sind frei wählbar.

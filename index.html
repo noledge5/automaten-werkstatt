@@ -171,6 +171,7 @@ dialog .btnrow { justify-content: flex-end; }
           <button id="toolMove" aria-pressed="true">Verschieben</button>
           <button id="toolArrow" aria-pressed="false">Pfeil ziehen</button>
         </div>
+        <button id="btnUndo" title="Rückgängig (Strg+Z)" disabled>Rückgängig</button>
         <span class="sp"></span>
         <div class="seg" role="group" aria-label="Modus">
           <button id="modeBuild" aria-pressed="true">Bauen</button>
@@ -442,6 +443,8 @@ let pending = null;      // Quelle beim Antippen im Pfeilwerkzeug
 let drag = null, rubber = null;
 let run = null;          // Probelauf
 let lastResult = null;   // Prüfergebnis (Aufgabenkarte)
+let undoStack = [];      // earlier drawings of the current task (JSON), only in memory
+let nameEdit = null;     // state whose name is being typed (one undo step per edit)
 
 /* ---------- Diagnose ---------- */
 function issues(g) {
@@ -518,7 +521,11 @@ function wrapName(nm) {
   }
   return best.l;
 }
-function fontFor(lines) { const m = Math.max(...lines.map(l => l.length)); return m <= 7 ? 15 : m <= 9 ? 13.5 : m <= 11 ? 12 : 10.5; }
+function fontFor(lines) {
+  const m = Math.max(...lines.map(l => l.length));
+  if (m > 12) return Math.round(66 / (0.5 * m) * 10) / 10; // long words: shrink so the name stays inside the circle
+  return m <= 7 ? 15 : m <= 9 ? 13.5 : m <= 11 ? 12 : 10.5;
+}
 function textLines(cx, cy, lines, size, lh) {
   const y0 = cy - (lines.length - 1) * lh / 2 + size * 0.35;
   return lines.map((l, i) => '<text x="' + cx.toFixed(1) + '" y="' + (y0 + i * lh).toFixed(1) + '" style="font-size:' + size + 'px">' + esc(l) + '</text>').join('');
@@ -581,6 +588,8 @@ function renderCanvas() {
       const hw = Math.max(...lines.map(x => x.length)) * 3.3, dist = 12 + Math.abs(ge.oy) * 7.5 * L + Math.abs(ge.ox) * hw;
       d = ge.d; lx = ge.px + ge.ox * dist; ly = ge.py + ge.oy * dist;
     }
+    const lw = Math.max(...lines.map(x => x.length)) * 3.3 + 4, lh = 7.5 * L + 4;
+    lx = Math.min(VBW - lw, Math.max(lw, lx)); ly = Math.min(VBH - lh, Math.max(lh, ly));
     const isSel = sel && sel.t === 'edge' && sel.from === grp.from && sel.to === grp.to;
     const fired = mode === 'test' && run && run.last === key;
     h += '<g class="ed' + (isSel ? ' sel' : '') + (fired ? ' fired' : '') + (bad.has(key) ? ' bad' : '') + '" data-from="' + grp.from + '" data-to="' + grp.to + '">' +
@@ -763,8 +772,17 @@ function freeSpot(g) {
   for (const y of ys) for (const x of xs) { if (g.states.every(s => Math.hypot(s.x - x, s.y - y) >= 100)) return [x, y]; }
   return [60 + Math.random() * 640, 60 + Math.random() * 360];
 }
+function snap(json) {
+  undoStack.push(json || JSON.stringify(G())); if (undoStack.length > 50) undoStack.shift();
+  renderToolbar();
+}
+function undo() {
+  if (mode !== 'build' || !undoStack.length) return;
+  TS().g = JSON.parse(undoStack.pop()); sel = null; pending = null; nameEdit = null; lastResult = null; persist(); renderAll();
+}
+function clearUndo() { undoStack = []; nameEdit = null; }
 function addState() {
-  const g = G(); let n = 1; while (g.states.some(s => s.name === 'Z' + n)) n++;
+  snap(); const g = G(); let n = 1; while (g.states.some(s => s.name === 'Z' + n)) n++;
   const [x, y] = freeSpot(g), id = 's' + g.seq++;
   g.states.push({ id, name: 'Z' + n, x, y });
   if (!g.start && g.states.length === 1) g.start = id;
@@ -772,12 +790,13 @@ function addState() {
   if (window.matchMedia && matchMedia('(pointer:fine)').matches) { const f = $('#stName'); if (f) { f.focus(); f.select(); } }
 }
 function delState(id) {
-  const g = G(); g.states = g.states.filter(s => s.id !== id); g.trans = g.trans.filter(t => t.from !== id && t.to !== id);
-  if (g.start === id) g.start = null; sel = null; renderSel(); changed();
+  snap(); const g = G(); g.states = g.states.filter(s => s.id !== id); g.trans = g.trans.filter(t => t.from !== id && t.to !== id);
+  if (g.start === id) g.start = null; if (pending === id) pending = null; sel = null; renderSel(); changed(); renderHint();
 }
 function addTrans(from, to) {
   const g = G();
   if (!g.io.inputs.length) { flash('Lege zuerst mindestens eine Eingabe fest (Aufgabenkarte oben).'); return; }
+  snap();
   const used = g.trans.filter(t => t.from === from).map(t => t.input);
   const input = g.io.inputs.find(i => !used.includes(i)) || g.io.inputs[0];
   g.trans.push({ id: 't' + g.seq++, from, to, input, output: null });
@@ -791,7 +810,7 @@ svg.addEventListener('pointerdown', e => {
   const g = G(), node = e.target.closest('[data-node]'), edge = e.target.closest('.ed');
   if (node) {
     const id = node.dataset.node, s = stOf(g, id), p = svgPoint(e);
-    if (tool === 'move') { select({ t: 'state', id }); drag = { kind: 'move', id, dx: p.x - s.x, dy: p.y - s.y, x0: e.clientX, y0: e.clientY, moved: false }; }
+    if (tool === 'move') { select({ t: 'state', id }); drag = { kind: 'move', before: JSON.stringify(g), id, dx: p.x - s.x, dy: p.y - s.y, x0: e.clientX, y0: e.clientY, moved: false }; }
     else drag = { kind: 'arrow', src: id, x0: e.clientX, y0: e.clientY, moved: false };
     try { svg.setPointerCapture(e.pointerId); } catch (_) { /* ok */ }
     e.preventDefault();
@@ -813,7 +832,7 @@ svg.addEventListener('pointermove', e => {
 function endDrag(e) {
   if (!drag) return;
   const g = G(), d = drag; drag = null; rubber = null;
-  if (d.kind === 'move') { if (d.moved) { persist(); renderCanvas(); } return; }
+  if (d.kind === 'move') { if (d.moved) { snap(d.before); persist(); renderCanvas(); } return; }
   if (d.moved) {
     const tgt = nodeAt(svgPoint(e), g); pending = null;
     if (tgt && tgt.id !== d.src) addTrans(d.src, tgt.id); else renderCanvas();
@@ -866,6 +885,7 @@ function renderToolbar() {
   $('#toolMove').setAttribute('aria-pressed', tool === 'move'); $('#toolArrow').setAttribute('aria-pressed', tool === 'arrow');
   $('#modeBuild').setAttribute('aria-pressed', mode === 'build'); $('#modeTest').setAttribute('aria-pressed', mode === 'test');
   ['btnAdd', 'toolMove', 'toolArrow'].forEach(id => { $('#' + id).disabled = mode === 'test'; });
+  $('#btnUndo').disabled = mode === 'test' || !undoStack.length;
 }
 function renderAll() { renderHeader(); renderTask(); renderCanvas(); renderIssues(); renderHint(); renderSel(); renderRun(); renderToolbar(); }
 
@@ -882,47 +902,49 @@ function ask(msg, ok) {
 
 /* ---------- Ereignisse ---------- */
 $('#btnAdd').onclick = addState;
+$('#btnUndo').onclick = undo;
 $('#toolMove').onclick = () => { tool = 'move'; pending = null; renderToolbar(); renderHint(); renderCanvas(); };
 $('#toolArrow').onclick = () => { tool = 'arrow'; renderToolbar(); renderHint(); };
 $('#modeBuild').onclick = () => setMode('build');
 $('#modeTest').onclick = () => setMode('test');
-$('#taskSel').onchange = e => { store.current = e.target.value; sel = null; mode = 'build'; run = null; pending = null; lastResult = null; persist(); renderAll(); };
+$('#taskSel').onchange = e => { store.current = e.target.value; clearUndo(); sel = null; mode = 'build'; run = null; pending = null; lastResult = null; persist(); renderAll(); };
 $('#myName').oninput = e => { store.name = e.target.value.slice(0, 24); persist(); };
 
 $('#selCard').addEventListener('input', e => {
-  if (e.target.id === 'stName' && sel && sel.t === 'state') { const s = stOf(G(), sel.id); if (s) { s.name = e.target.value; changed(); } }
+  if (e.target.id === 'stName' && sel && sel.t === 'state') { const s = stOf(G(), sel.id); if (s) { if (nameEdit !== s.id) { snap(); nameEdit = s.id; } s.name = e.target.value; changed(); } }
 });
 $('#selCard').addEventListener('change', e => {
   const row = e.target.closest('.trow'); if (!row) return;
   const t = G().trans.find(x => x.id === row.dataset.tid); if (!t) return;
-  const f = e.target.dataset.f; if (f === 'input') t.input = e.target.value; else t.output = e.target.value || null;
+  snap(); const f = e.target.dataset.f; if (f === 'input') t.input = e.target.value; else t.output = e.target.value || null;
   renderSel(); changed();
 });
 $('#selCard').addEventListener('focusout', e => {
+  if (e.target.id === 'stName') nameEdit = null;
   if (e.target.id === 'stName' && sel && sel.t === 'state') { const s = stOf(G(), sel.id); if (s && !s.name.trim()) { s.name = 'Z' + s.id.slice(1); e.target.value = s.name; changed(); } }
 });
 $('#selCard').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return; const g = G();
-  if (b.id === 'stStart') { g.start = g.start === sel.id ? null : sel.id; renderSel(); changed(); }
+  if (b.id === 'stStart') { snap(); g.start = g.start === sel.id ? null : sel.id; renderSel(); changed(); }
   else if (b.id === 'stLoop') addTrans(sel.id, sel.id);
   else if (b.id === 'stDel') delState(sel.id);
   else if (b.id === 'edAdd') addTrans(sel.from, sel.to);
-  else if (b.id === 'edDel') { g.trans = g.trans.filter(t => !(t.from === sel.from && t.to === sel.to)); sel = null; renderSel(); changed(); }
-  else if (b.dataset.del) { g.trans = g.trans.filter(t => t.id !== b.dataset.del); renderSel(); changed(); }
+  else if (b.id === 'edDel') { snap(); g.trans = g.trans.filter(t => !(t.from === sel.from && t.to === sel.to)); sel = null; renderSel(); changed(); }
+  else if (b.dataset.del) { snap(); g.trans = g.trans.filter(t => t.id !== b.dataset.del); renderSel(); changed(); }
 });
 $('#taskCard').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return; const t = curTask(), g = G();
   if (b.id === 'btnCheck') { lastResult = runCheck(t, g); if (lastResult.ok) { TS().done = true; persist(); renderHeader(); } renderResult(); }
   else if (b.id === 'btnSolution') {
     if (await ask('Willst du die Musterlösung wirklich sehen? Deine Zeichnung wird dadurch ersetzt. Probiere es erst selbst.', 'Musterlösung zeigen')) {
-      TS().g = graphFromSpec(t.ref, t.io); sel = null; mode = 'build'; run = null; pending = null; lastResult = null; persist(); renderAll();
+      snap(); TS().g = graphFromSpec(t.ref, t.io); sel = null; mode = 'build'; run = null; pending = null; lastResult = null; persist(); renderAll();
     }
   } else if (b.id === 'btnReset') {
     if (await ask('Deine Zeichnung zu dieser Aufgabe wird gelöscht und der Anfang wiederhergestellt.', 'Neu beginnen')) {
-      const done = TS().done; store.tasks[t.id] = newTaskState(t); store.tasks[t.id].done = done; sel = null; mode = 'build'; run = null; pending = null; lastResult = null; persist(); renderAll();
+      snap(); const done = TS().done; store.tasks[t.id] = newTaskState(t); store.tasks[t.id].done = done; sel = null; mode = 'build'; run = null; pending = null; lastResult = null; persist(); renderAll();
     }
   } else if (b.dataset.rm) {
-    const arr = b.dataset.rm === 'in' ? g.io.inputs : g.io.outputs, name = arr[+b.dataset.i];
+    snap(); const arr = b.dataset.rm === 'in' ? g.io.inputs : g.io.outputs, name = arr[+b.dataset.i];
     arr.splice(+b.dataset.i, 1);
     g.trans = g.trans.filter(x => b.dataset.rm === 'in' ? x.input !== name : true);
     if (b.dataset.rm === 'out') g.trans.forEach(x => { if (x.output === name) x.output = null; });
@@ -932,14 +954,14 @@ $('#taskCard').addEventListener('click', async e => {
   else if (b.id === 'shCopy') copyShare();
   else if (b.id === 'btnRemove') {
     if (await ask('Diese geteilte Aufgabe wird samt deiner Zeichnung von diesem Gerät entfernt. Der Link funktioniert weiterhin.', 'Entfernen')) {
-      const id = t.id; store.current = 'becher'; removeCustomTask(id); sel = null; mode = 'build'; run = null; pending = null; lastResult = null; persist(); renderAll();
+      const id = t.id; store.current = 'becher'; clearUndo(); removeCustomTask(id); sel = null; mode = 'build'; run = null; pending = null; lastResult = null; persist(); renderAll();
     }
   }
 });
 function addIo(kind) {
   const inp = $('#add_' + kind), g = G(), v = inp.value.trim(); if (!v) return;
   const arr = kind === 'in' ? g.io.inputs : g.io.outputs;
-  if (!arr.includes(v) && arr.length < 8) arr.push(v);
+  if (!arr.includes(v) && arr.length < 8) { snap(); arr.push(v); }
   refocus = '#add_' + kind; renderTask(); renderRun(); renderSel(); persist();
 }
 $('#taskCard').addEventListener('input', e => { if (e.target.id === 'shTitle') share.title = e.target.value; else if (e.target.id === 'shText') share.text = e.target.value; });
@@ -954,9 +976,11 @@ $('#runCard').addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   const tag = (e.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
-  if (mode === 'build' && (e.key === 'Delete' || e.key === 'Backspace') && sel) {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+  const onCanvas = e.target === document.body || svg.contains(e.target);
+  if (mode === 'build' && (e.key === 'Delete' || e.key === 'Backspace') && sel && onCanvas) {
     e.preventDefault(); const g = G();
-    if (sel.t === 'state') delState(sel.id); else { g.trans = g.trans.filter(t => !(t.from === sel.from && t.to === sel.to)); sel = null; renderSel(); changed(); }
+    if (sel.t === 'state') delState(sel.id); else { snap(); g.trans = g.trans.filter(t => !(t.from === sel.from && t.to === sel.to)); sel = null; renderSel(); changed(); }
   } else if (e.key === 'Escape') { pending = null; sel = null; renderSel(); renderCanvas(); renderHint(); }
   else if (mode === 'test' && /^[1-9]$/.test(e.key)) { const i = G().io.inputs[+e.key - 1]; if (i) press(i); }
 });
