@@ -148,6 +148,10 @@ dialog .btnrow { justify-content: flex-end; }
 .ed.sel .lbl text, .ed.fired .lbl text { fill: var(--accent); font-weight: 700; }
 .startArrow { fill: none; stroke: var(--ink); stroke-width: 2.4; marker-end: url(#ah); }
 .rubber { fill: none; stroke: var(--accent); stroke-width: 2.6; stroke-dasharray: 6 5; marker-end: url(#ahA); pointer-events: none; }
+.st:focus, .ed:focus { outline: none; }
+.st:focus-visible circle { stroke: var(--accent); stroke-width: 6; }
+.ed:focus-visible .line { stroke: var(--accent); stroke-width: 4; }
+.ed:focus-visible .lbl text { fill: var(--accent); font-weight: 700; }
 #mA { fill: var(--ink); } #mB { fill: var(--accent); } #mC { fill: var(--warn); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
@@ -178,7 +182,7 @@ dialog .btnrow { justify-content: flex-end; }
           <button id="modeTest" aria-pressed="false">Testen</button>
         </div>
       </div>
-      <div class="canvasbox"><svg id="cv" viewBox="0 0 760 480" role="img" aria-label="Zustandsdiagramm"></svg></div>
+      <div class="canvasbox"><svg id="cv" viewBox="0 0 760 480" role="group" aria-label="Zustandsdiagramm"></svg></div>
       <div class="hint" id="hint"></div>
       <ul class="issues" id="issues" aria-live="polite"></ul>
     </section>
@@ -570,7 +574,8 @@ const svg = $('#cv');
 function renderCanvas() {
   const g = G(), iss = issues(g), bad = new Set();
   iss.filter(i => i.k === 'multi').forEach(i => g.trans.filter(t => t.from === i.from && t.input === i.input).forEach(t => bad.add(t.from + '>' + t.to)));
-  const groups = new Map();
+  const groups = new Map(), tab = mode === 'build' ? ' tabindex="0"' : '';
+  const fa = document.activeElement, fk = fa && svg.contains(fa) && fa.dataset ? fa.dataset.key : null;
   g.trans.forEach(t => { const k = t.from + '>' + t.to; if (!groups.has(k)) groups.set(k, { from: t.from, to: t.to, rows: [] }); groups.get(k).rows.push(t); });
   let h = '<defs>' +
     '<marker id="ah" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto"><path id="mA" d="M0 0L12 6L0 12z"/></marker>' +
@@ -592,7 +597,8 @@ function renderCanvas() {
     lx = Math.min(VBW - lw, Math.max(lw, lx)); ly = Math.min(VBH - lh, Math.max(lh, ly));
     const isSel = sel && sel.t === 'edge' && sel.from === grp.from && sel.to === grp.to;
     const fired = mode === 'test' && run && run.last === key;
-    h += '<g class="ed' + (isSel ? ' sel' : '') + (fired ? ' fired' : '') + (bad.has(key) ? ' bad' : '') + '" data-from="' + grp.from + '" data-to="' + grp.to + '">' +
+    h += '<g class="ed' + (isSel ? ' sel' : '') + (fired ? ' fired' : '') + (bad.has(key) ? ' bad' : '') + '" data-from="' + grp.from + '" data-to="' + grp.to + '" data-key="e:' + key + '"' + tab +
+      ' role="button" aria-label="' + esc('Pfeil ' + A.name + ' nach ' + B.name + ': ' + lines.join(' ')) + '">' +
       '<path class="hit" d="' + d + '"/><path class="line" d="' + d + '"/><g class="lbl">' + textLines(lx, ly, lines, 13, 15) + '</g></g>';
   });
   if (g.start) {
@@ -602,14 +608,16 @@ function renderCanvas() {
   g.states.forEach(s => {
     const lines = wrapName(s.name || '?'), fs = fontFor(lines);
     const cls = 'st' + (sel && sel.t === 'state' && sel.id === s.id ? ' sel' : '') + (mode === 'test' && run && run.state === s.id ? ' cur' : '') + (pending === s.id ? ' pend' : '');
-    h += '<g class="' + cls + '" data-node="' + s.id + '"><circle cx="' + s.x + '" cy="' + s.y + '" r="' + R + '"/>' + textLines(s.x, s.y, lines, fs, fs + 3) + '</g>';
+    h += '<g class="' + cls + '" data-node="' + s.id + '" data-key="n:' + s.id + '"' + tab + ' role="button" aria-label="' +
+      esc('Zustand ' + s.name + (g.start === s.id ? ', Startzustand' : '') + (mode === 'test' && run && run.state === s.id ? ', aktuell' : '')) + '"><circle cx="' + s.x + '" cy="' + s.y + '" r="' + R + '"/>' + textLines(s.x, s.y, lines, fs, fs + 3) + '</g>';
   });
   if (rubber) h += '<path class="rubber" d="M ' + rubber.x1 + ' ' + rubber.y1 + ' L ' + rubber.x2 + ' ' + rubber.y2 + '"/>';
   svg.innerHTML = h;
+  if (fk) { const el = svg.querySelector('[data-key="' + fk + '"]'); if (el) el.focus({ preventScroll: true }); }
 }
 function renderIssues() {
   const g = G(), iss = issues(g), ul = $('#issues');
-  if (!g.states.length) { ul.innerHTML = ''; return; }
+  if (!g.states.length || !g.trans.length) { ul.innerHTML = ''; return; } // before the first arrow every state would be flagged
   ul.innerHTML = iss.length ? iss.map(i => '<li>' + esc(i.text) + '</li>').join('')
     : '<li class="fine">Keine Hinweise: Der Automat ist eindeutig, hat einen Startzustand und alle Zustände sind erreichbar.</li>';
 }
@@ -773,14 +781,14 @@ function freeSpot(g) {
   return [60 + Math.random() * 640, 60 + Math.random() * 360];
 }
 function snap(json) {
-  undoStack.push(json || JSON.stringify(G())); if (undoStack.length > 50) undoStack.shift();
+  undoStack.push(json || JSON.stringify(G())); if (undoStack.length > 50) undoStack.shift(); keyMoveId = null;
   renderToolbar();
 }
 function undo() {
   if (mode !== 'build' || !undoStack.length) return;
   TS().g = JSON.parse(undoStack.pop()); sel = null; pending = null; nameEdit = null; lastResult = null; persist(); renderAll();
 }
-function clearUndo() { undoStack = []; nameEdit = null; }
+function clearUndo() { undoStack = []; nameEdit = null; keyMoveId = null; }
 function addState() {
   snap(); const g = G(); let n = 1; while (g.states.some(s => s.name === 'Z' + n)) n++;
   const [x, y] = freeSpot(g), id = 's' + g.seq++;
@@ -841,6 +849,29 @@ function endDrag(e) {
   renderHint();
 }
 svg.addEventListener('pointerup', endDrag);
+let keyMoveId = null;
+svg.addEventListener('keydown', e => {
+  if (mode !== 'build' || e.ctrlKey || e.metaKey || e.altKey) return;
+  const el = e.target.closest('[data-key]'); if (!el) return;
+  const g = G(), node = el.dataset.node;
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    if (!node) { pending = null; select({ t: 'edge', from: el.dataset.from, to: el.dataset.to }); }
+    else if (tool === 'move') select({ t: 'state', id: node });
+    else if (pending) { const src = pending; pending = null; addTrans(src, node); }
+    else { pending = node; renderCanvas(); }
+    renderHint();
+  } else if (node && /^Arrow(Up|Down|Left|Right)$/.test(e.key)) {
+    e.preventDefault();
+    const s = stOf(g, node), step = e.shiftKey ? 2 : 10; if (!s) return;
+    if (keyMoveId !== node) { snap(); keyMoveId = node; }
+    if (e.key === 'ArrowLeft') s.x -= step; else if (e.key === 'ArrowRight') s.x += step; else if (e.key === 'ArrowUp') s.y -= step; else s.y += step;
+    s.x = Math.min(VBW - R - 4, Math.max(R + 4, s.x)); s.y = Math.min(VBH - R - 4, Math.max(R + 4, s.y));
+    persist(); renderCanvas();
+  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    sel = node ? { t: 'state', id: node } : { t: 'edge', from: el.dataset.from, to: el.dataset.to }; // the global handler deletes it
+  }
+});
 svg.addEventListener('pointercancel', () => { drag = null; rubber = null; renderCanvas(); });
 
 /* ---------- Bedienfeld und Probelauf ---------- */

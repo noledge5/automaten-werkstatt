@@ -8,11 +8,13 @@ Zustandsautomaten zeichnen, ausprobieren und automatisch prüfen lassen. Gedacht
 - **Bauen:** „+ Zustand“, Zustände verschieben, mit dem Werkzeug „Pfeil ziehen“ Übergänge zeichnen. Pro Pfeil
   werden Eingabe und Ausgabe gewählt. Zweimal auf denselben Zustand tippen erzeugt eine Schleife.
   „Rückgängig“ (oder Strg+Z) nimmt die letzten Schritte zurück, solange die Aufgabe offen ist.
+  Mit der Tastatur: Tab springt zu Zuständen und Pfeilen, Enter wählt aus (im Werkzeug „Pfeil ziehen“: erst
+  Start-, dann Zielzustand), Pfeiltasten verschieben (mit Umschalt feiner), Entf löscht.
 - **Testen:** Bedienfeld mit Eingängen (Taster) und Ausgängen (Lampen). Zeigt Zustand, Anzahl der Eingaben und
   Ausgaben und ein Protokoll.
 - **Prüfen:** Vergleicht das Verhalten mit der Musterlösung (nicht die Zeichnung). Zustandsnamen sind frei wählbar.
   Bei Abweichung zeigt eine Tabelle die erste Eingabefolge, bei der es schiefgeht.
-- **Hinweise** unter der Zeichnung: mehrdeutige Pfeile, Sackgassen, unerreichbare Zustände.
+- **Hinweise** unter der Zeichnung (ab dem ersten Pfeil): mehrdeutige Pfeile, Sackgassen, unerreichbare Zustände.
 
 ## Direktlinks zu Aufgaben (für QR-Codes)
 
