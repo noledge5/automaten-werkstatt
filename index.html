@@ -518,7 +518,11 @@ function wrapName(nm) {
   }
   return best.l;
 }
-function fontFor(lines) { const m = Math.max(...lines.map(l => l.length)); return m <= 7 ? 15 : m <= 9 ? 13.5 : m <= 11 ? 12 : 10.5; }
+function fontFor(lines) {
+  const m = Math.max(...lines.map(l => l.length));
+  if (m > 12) return Math.round(66 / (0.5 * m) * 10) / 10; // long words: shrink so the name stays inside the circle
+  return m <= 7 ? 15 : m <= 9 ? 13.5 : m <= 11 ? 12 : 10.5;
+}
 function textLines(cx, cy, lines, size, lh) {
   const y0 = cy - (lines.length - 1) * lh / 2 + size * 0.35;
   return lines.map((l, i) => '<text x="' + cx.toFixed(1) + '" y="' + (y0 + i * lh).toFixed(1) + '" style="font-size:' + size + 'px">' + esc(l) + '</text>').join('');
@@ -581,6 +585,8 @@ function renderCanvas() {
       const hw = Math.max(...lines.map(x => x.length)) * 3.3, dist = 12 + Math.abs(ge.oy) * 7.5 * L + Math.abs(ge.ox) * hw;
       d = ge.d; lx = ge.px + ge.ox * dist; ly = ge.py + ge.oy * dist;
     }
+    const lw = Math.max(...lines.map(x => x.length)) * 3.3 + 4, lh = 7.5 * L + 4;
+    lx = Math.min(VBW - lw, Math.max(lw, lx)); ly = Math.min(VBH - lh, Math.max(lh, ly));
     const isSel = sel && sel.t === 'edge' && sel.from === grp.from && sel.to === grp.to;
     const fired = mode === 'test' && run && run.last === key;
     h += '<g class="ed' + (isSel ? ' sel' : '') + (fired ? ' fired' : '') + (bad.has(key) ? ' bad' : '') + '" data-from="' + grp.from + '" data-to="' + grp.to + '">' +
@@ -773,7 +779,7 @@ function addState() {
 }
 function delState(id) {
   const g = G(); g.states = g.states.filter(s => s.id !== id); g.trans = g.trans.filter(t => t.from !== id && t.to !== id);
-  if (g.start === id) g.start = null; sel = null; renderSel(); changed();
+  if (g.start === id) g.start = null; if (pending === id) pending = null; sel = null; renderSel(); changed(); renderHint();
 }
 function addTrans(from, to) {
   const g = G();
@@ -954,7 +960,8 @@ $('#runCard').addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   const tag = (e.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
-  if (mode === 'build' && (e.key === 'Delete' || e.key === 'Backspace') && sel) {
+  const onCanvas = e.target === document.body || svg.contains(e.target);
+  if (mode === 'build' && (e.key === 'Delete' || e.key === 'Backspace') && sel && onCanvas) {
     e.preventDefault(); const g = G();
     if (sel.t === 'state') delState(sel.id); else { g.trans = g.trans.filter(t => !(t.from === sel.from && t.to === sel.to)); sel = null; renderSel(); changed(); }
   } else if (e.key === 'Escape') { pending = null; sel = null; renderSel(); renderCanvas(); renderHint(); }
